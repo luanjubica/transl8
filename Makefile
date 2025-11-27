@@ -14,6 +14,7 @@ help:
 	@echo "  make logs           - View logs from all services"
 	@echo "  make logs-api       - View API logs"
 	@echo "  make logs-worker    - View worker logs"
+	@echo "  make logs-frontend  - View frontend logs"
 	@echo ""
 	@echo "Database:"
 	@echo "  make migrate        - Run database migrations"
@@ -38,6 +39,7 @@ build:
 up:
 	docker-compose up -d
 	@echo "Services starting..."
+	@echo "Frontend: http://localhost:3000"
 	@echo "API: http://localhost:8000"
 	@echo "API Docs: http://localhost:8000/docs"
 	@echo "Flower (Celery monitoring): http://localhost:5555"
@@ -59,6 +61,19 @@ logs-worker:
 
 logs-flower:
 	docker-compose logs -f flower
+
+logs-frontend:
+	docker-compose logs -f frontend
+
+# Frontend commands
+frontend-shell:
+	docker-compose exec frontend /bin/sh
+
+frontend-build:
+	docker-compose build frontend
+
+restart-frontend:
+	docker-compose restart frontend
 
 # Database commands
 migrate:
@@ -118,6 +133,9 @@ prod-ps:
 # Health checks
 health:
 	@echo "Checking service health..."
+	@echo "Frontend:"
+	@curl -s http://localhost:3000/api/health | python -m json.tool || echo "Frontend not responding"
+	@echo "\nAPI:"
 	@curl -s http://localhost:8000/health | python -m json.tool || echo "API not responding"
 
 # Quick restart specific services

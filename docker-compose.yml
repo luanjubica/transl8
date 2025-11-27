@@ -264,6 +264,35 @@ services:
           cpus: '0.5'
           memory: 256M
 
+  # Frontend (Next.js)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: transl8-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://api:8000
+      - NEXT_PUBLIC_APP_URL=http://localhost:3000
+    env_file:
+      - ./frontend/.env.local
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - transl8-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
 volumes:
   postgres_data:
     driver: local
