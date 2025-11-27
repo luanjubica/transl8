@@ -1,13 +1,16 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
     container_name: transl8-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: transl8
       POSTGRES_PASSWORD: transl8password
       POSTGRES_DB: transl8
+      PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "5432:5432"
     volumes:
@@ -17,10 +20,15 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - transl8-network
 
+  # Redis (Cache + Message Broker)
   redis:
     image: redis:7-alpine
     container_name: transl8-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
     ports:
       - "6379:6379"
     volumes:
@@ -30,29 +38,238 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - transl8-network
 
-  # Uncomment to run backend in Docker (optional for local development)
-  # backend:
-  #   build:
-  #     context: ./backend
-  #     dockerfile: Dockerfile
-  #   container_name: transl8-backend
-  #   ports:
-  #     - "8000:8000"
-  #   environment:
-  #     - DATABASE_URL=postgresql://transl8:transl8password@postgres:5432/transl8
-  #     - REDIS_URL=redis://redis:6379/0
-  #   env_file:
-  #     - ./backend/.env
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
-  #   volumes:
-  #     - ./backend:/app
-  #   command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+  # API Service (FastAPI)
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: transl8-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - DATABASE_URL=postgresql://transl8:transl8password@postgres:5432/transl8
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=transl8
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: /bin/bash -c "chmod +x /app/scripts/start-api.sh && /app/scripts/start-api.sh"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - transl8-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Celery Worker - Parsing Queue
+  worker-parsing:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: transl8-worker-parsing
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql://transl8:transl8password@postgres:5432/transl8
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CELERY_QUEUES=parsing
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=transl8
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: /bin/bash -c "chmod +x /app/scripts/start-worker.sh && /app/scripts/start-worker.sh"
+    networks:
+      - transl8-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Celery Worker - Translation Queue
+  worker-translation:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: transl8-worker-translation
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql://transl8:transl8password@postgres:5432/transl8
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CELERY_QUEUES=translation
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=transl8
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: /bin/bash -c "chmod +x /app/scripts/start-worker.sh && /app/scripts/start-worker.sh"
+    networks:
+      - transl8-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+
+  # Celery Worker - Export Queue
+  worker-export:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: transl8-worker-export
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql://transl8:transl8password@postgres:5432/transl8
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CELERY_QUEUES=export
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=transl8
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: /bin/bash -c "chmod +x /app/scripts/start-worker.sh && /app/scripts/start-worker.sh"
+    networks:
+      - transl8-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+  # Celery Beat (Scheduler for periodic tasks)
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: transl8-beat
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=development
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - ./backend/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+    command: /bin/bash -c "chmod +x /app/scripts/start-beat.sh && /app/scripts/start-beat.sh"
+    networks:
+      - transl8-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # Flower (Celery monitoring - optional)
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: transl8-flower
+    restart: unless-stopped
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - FLOWER_PORT=5555
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: celery -A app.core.celery_app flower --port=5555
+    networks:
+      - transl8-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
 
 volumes:
   postgres_data:
+    driver: local
   redis_data:
+    driver: local
+
+networks:
+  transl8-network:
+    driver: bridge
