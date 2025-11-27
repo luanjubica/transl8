@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
-from app.api.v1 import projects, documents
+from app.api.v1 import projects, documents, segments, translations, glossaries, tm, jobs
 
 # Create FastAPI app
 app = FastAPI(
@@ -27,6 +27,11 @@ app.add_middleware(
 # Include API routers
 app.include_router(projects.router, prefix=settings.api_prefix)
 app.include_router(documents.router, prefix=settings.api_prefix)
+app.include_router(segments.router, prefix=settings.api_prefix)
+app.include_router(translations.router, prefix=settings.api_prefix)
+app.include_router(glossaries.router, prefix=settings.api_prefix)
+app.include_router(tm.router, prefix=settings.api_prefix)
+app.include_router(jobs.router, prefix=settings.api_prefix)
 
 
 @app.get("/health", tags=["health"])
@@ -60,7 +65,16 @@ def root():
         "version": settings.API_VERSION,
         "docs": "/docs",
         "redoc": "/redoc",
-        "health": "/health"
+        "health": "/health",
+        "endpoints": {
+            "projects": f"{settings.api_prefix}/projects",
+            "documents": f"{settings.api_prefix}/documents",
+            "segments": f"{settings.api_prefix}/segments",
+            "translations": f"{settings.api_prefix}/translations",
+            "glossaries": f"{settings.api_prefix}/glossaries",
+            "translation_memory": f"{settings.api_prefix}/tm",
+            "jobs": f"{settings.api_prefix}/jobs"
+        }
     }
 
 
