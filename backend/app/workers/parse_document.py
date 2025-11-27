@@ -2,11 +2,14 @@ from celery import Task
 from sqlalchemy.orm import Session
 from uuid import UUID
 from datetime import datetime
+import hashlib
 
 from app.core.celery_app import celery_app
 from app.core.database import SessionLocal
 from app.models.document import Document
 from app.models.segment import Segment
+from app.services.file_parser import file_parser, FileType
+from app.services.storage_service import StorageService
 
 
 class ParseDocumentTask(Task):
@@ -41,11 +44,9 @@ def parse_document(self, document_id: str):
 
     Args:
         document_id: Document UUID
-
-    TODO: Implement actual parsers (XML, JSON, CSV, etc.)
-    This is a placeholder for the parsing logic.
     """
     db = SessionLocal()
+    storage = StorageService()
 
     try:
         # Get document
@@ -57,62 +58,77 @@ def parse_document(self, document_id: str):
         document.status = 'processing'
         db.commit()
 
-        # TODO: Download file from S3 using document.file_url
+        # Download file from S3
+        file_content = storage.download_file(document.file_key)
 
-        # TODO: Parse based on file_type
-        # - XML: Use lxml + defusedxml
-        # - JSON: Use json module
-        # - CSV: Use csv module
-        # - XLIFF: Use lxml
-        # - DOCX: Use python-docx
-        # - PDF: Use pdfplumber
+        # Convert bytes to string for text-based formats
+        try:
+            content_str = file_content.decode('utf-8')
+        except UnicodeDecodeError:
+            # Try other encodings
+            try:
+                content_str = file_content.decode('latin-1')
+            except:
+                raise ValueError("Unable to decode file content")
 
-        # Placeholder: Create sample segments
-        sample_segments = [
-            {
-                "index": 0,
-                "source_text": "Sample segment 1",
-                "placeholders": [],
-                "char_count": 16,
-                "word_count": 3
-            },
-            {
-                "index": 1,
-                "source_text": "Welcome {user_name}!",
-                "placeholders": ["{user_name}"],
-                "char_count": 20,
-                "word_count": 2
-            }
-        ]
+        # Parse file
+        parsed_segments, metadata = file_parser.parse_file(
+            filename=document.filename,
+            content=content_str,
+            file_type=None  # Auto-detect
+        )
 
-        # Store segments
-        for seg_data in sample_segments:
+        # Update document with metadata
+        document.file_metadata = metadata
+
+        # Store segments in database
+        for index, parsed_seg in enumerate(parsed_segments):
+            # Calculate hash for TM matching
+            source_hash = hashlib.md5(
+                parsed_seg.source_text.encode('utf-8')
+            ).hexdigest()
+
+            # Count words (simple split by whitespace)
+            word_count = len(parsed_seg.source_text.split())
+            char_count = len(parsed_seg.source_text)
+
             segment = Segment(
                 document_id=document.id,
-                index=seg_data["index"],
-                source_text=seg_data["source_text"],
-                char_count=seg_data["char_count"],
-                word_count=seg_data["word_count"],
-                placeholders=seg_data["placeholders"],
-                max_length=document.max_segment_length
+                index=index,
+                segment_key=parsed_seg.segment_id,
+                source_text=parsed_seg.source_text,
+                context=parsed_seg.context,
+                source_hash=source_hash,
+                char_count=char_count,
+                word_count=word_count,
+                placeholders=parsed_seg.placeholders,
+                max_length=parsed_seg.max_length or document.max_segment_length,
+                is_locked=parsed_seg.metadata.get('is_locked', False)
             )
             db.add(segment)
 
         # Update document status
         document.status = 'ready'
+        document.segments_count = len(parsed_segments)
         db.commit()
 
         return {
             "document_id": str(document_id),
-            "segments_count": len(sample_segments),
+            "segments_count": len(parsed_segments),
+            "file_type": metadata.get('file_type'),
             "status": "success"
         }
 
     except Exception as e:
-        document = db.query(Document).filter(Document.id == UUID(document_id)).first()
-        if document:
-            document.status = 'error'
-            db.commit()
+        # Update document status to error
+        try:
+            document = db.query(Document).filter(Document.id == UUID(document_id)).first()
+            if document:
+                document.status = 'error'
+                document.error_message = str(e)
+                db.commit()
+        except:
+            pass
         raise
 
     finally:
