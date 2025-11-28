@@ -10,7 +10,8 @@ import {
   BookOpen,
   Users,
   Settings,
-  FileText
+  FileText,
+  Database
 } from 'lucide-react'
 
 const navigation = [
@@ -18,6 +19,7 @@ const navigation = [
   { name: 'Projects', href: '/dashboard/projects', icon: FolderKanban },
   { name: 'Documents', href: '/dashboard/documents', icon: FileText },
   { name: 'Glossaries', href: '/dashboard/glossaries', icon: BookOpen },
+  { name: 'Translation Memory', href: '/dashboard/translation-memory', icon: Database },
   { name: 'Team', href: '/dashboard/team', icon: Users },
   { name: 'Settings', href: '/dashboard/settings', icon: Settings },
 ]
